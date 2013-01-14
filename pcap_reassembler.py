@@ -1,4 +1,9 @@
-"""Module comment"""
+"""pcap reassembler
+
+Provides a way to reassemble application layer messages from UDP or TCP
+packets found in a pcap file.
+
+"""
 
 import sys
 import pcap
