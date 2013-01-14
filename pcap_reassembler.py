@@ -24,9 +24,19 @@ _tcp_conn   = None
 _msgs       = None
 
 class Message(dict):
-    """This class wraps a reassembled message in a dictionary.
-    Message attributes are accessible as regular object attributes,
-    using dot-notation.
+    """Reassembled message class
+
+    Message attributes are accessible as regular object attributes using
+    dot-notation. The common available attributes are:
+
+     * timestamp
+     * ip_protocol
+     * source_addr
+     * destination_addr
+     * source_port
+     * destination_port
+     * data
+
     """
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
