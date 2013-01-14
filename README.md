@@ -17,6 +17,11 @@ flag.
 
 pcap-reassembler is implemented through [pylibpcap](http://pylibpcap.sourceforge.net/).
 
+Installation
+------------
+
+Install pcap-reassembler with ```python setup.py install```
+
 Usage
 -----
 ```python
