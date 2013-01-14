@@ -11,7 +11,7 @@ acknowledgement numbers between segments. For UDP, each datagram payload is
 interpreted as an application layer message.
 
 As of now, pcap-reassembler is compatible with Ethernet as link layer protocol,
-IP as network layer protocol, and TCP or UDP as transport layer protocols. The
+IPv4 as network layer protocol, and TCP or UDP as transport layer protocols. The
 transport layer protocol is automatically detected from the IP header protocol
 flag.
 
