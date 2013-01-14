@@ -24,7 +24,10 @@ _tcp_conn   = None
 _msgs       = None
 
 class Message(dict):
-    """Class comment"""
+    """This class wraps a reassembled message in a dictionary.
+    Message attributes are accessible as regular object attributes,
+    using dot-notation.
+    """
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
