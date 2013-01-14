@@ -10,17 +10,21 @@ import pcap
 import struct
 import time
 
+# EtherType constants
 _ether_type = {
     'IPv4': '\x08\x00',
     'IPv6': '\x86\xdd',
 }
 
+# IP protocol field constants
 _ip_protocol = {
     'TCP': '\x06',
     'UDP': '\x11',
 }
 
+# TCP connection buffer
 _tcp_conn   = None
+# message buffer
 _msgs       = None
 
 class Message(dict):
@@ -42,8 +46,8 @@ class Message(dict):
     __setattr__ = dict.__setitem__
 
 def load_pcap(filename):
-    """Loads a pcap file and returns a list of Message-objects, containing
-    the reassembled application-layer messages.
+    """Loads a pcap file and returns a list of Message objects
+    containing the reassembled application layer messages.
 
     Usage:
         >>> import pcap_reassembler
@@ -59,14 +63,17 @@ def load_pcap(filename):
     p.open_offline(filename)
     # process all packets
     p.dispatch(-1, _process_eth)
-    # flush TCP connections
+    # flush all TCP connections for remaining messages
     for src in _tcp_conn:
         _tcp_flush(src)
     return _msgs
 
 def _process_eth(length, data, ts):
-    """Function comment"""
-    # strips ethernet header
+    """Processes an Ethernet packet (header to checksum; not the full frame).
+
+    Propagates processing to the correct IP version processing function.
+
+    """
     eth_type = data[12:14]
     pld = data[14:]
     if eth_type == _ether_type['IPv4']:
@@ -75,8 +82,13 @@ def _process_eth(length, data, ts):
         raise NotImplementedError
 
 def _process_ipv4(ts, data):
-    """Function comment"""
-    # extract source address, destination address, protocol type
+    """Processes an IPv4 packet.
+
+    Extracts source address, destination address and protocol fields
+    and propagates processing to the correct protocol processing
+    function.
+
+    """
     header_len = 4 * (_decode_byte(data[0]) & 0x0f)
     tot_len = _decode_short(data[2:4])
     ip_type = data[9]
@@ -91,7 +103,16 @@ def _process_ipv4(ts, data):
         raise NotImplementedError
 
 def _process_tcp(ts, src_addr, dst_addr, data):
-    """Function comment"""
+    """Processes a TCP packet.
+
+    Extracts source port, destination port, sequence number and
+    acknowledgement number and adds the payload to the current message
+    data. If there is no current message in the buffer one is created
+    with the attributes of the current packet. When the acknowledgement
+    number changes the TCP connection buffer associated with the
+    current source address is flushed.
+
+    """
     # reassemble PDUs by buffering packets and flushing when ack changes
     src_port = _decode_short(data[0:2])
     dst_port = _decode_short(data[2:4])
@@ -119,12 +140,22 @@ def _process_tcp(ts, src_addr, dst_addr, data):
         del _tcp_conn[src_addr]
 
 def _tcp_flush(src):
-        msg = _tcp_conn[src]
-        msg['data'] = ''.join(msg.data)
-        _msgs.append(msg)
+    """Flushes the specified TCP connection buffer.
+
+    Adds the flushed message to the message buffer.
+
+    """
+    msg = _tcp_conn[src]
+    msg['data'] = ''.join(msg.data)
+    _msgs.append(msg)
 
 def _process_udp(ts, src_addr, dst_addr, data):
-    """Function comment"""
+    """Processes an UDP packet.
+
+    Extracts source and destination port and creates a message
+    from the current packet which is added to the message buffer.
+
+    """
     src_port = _decode_short(data[0:2])
     dst_port = _decode_short(data[2:4])
     msg = Message({
@@ -139,21 +170,23 @@ def _process_udp(ts, src_addr, dst_addr, data):
     _msgs.append(msg)
 
 def _decode_byte(data):
-    """Function comment"""
+    """Decodes one byte of network data into an unsigned char."""
     return struct.unpack('!B', data)[0]
 
 def _decode_short(data):
-    """Function comment"""
+    """Decodes two bytes of network data into an unsigned short."""
     return struct.unpack('!H', data)[0]
 
 def _decode_word(data):
-    """Function comment"""
+    """Decodes four bytes of network data into an unsigned int."""
     return struct.unpack('!I', data)[0]
 
 def validate_tcp_checksum(length, src, dst, data):
-    """Validates a TCP checksum according to RFC 1071. Takes length, source
-    address and destination address for computing the IP pseudo-header.
-    The data-parameter contains the entire TCP packet.
+    """Validates a TCP checksum according to RFC 1071.
+
+    Takes length, source address and destination address for computing
+    the IP pseudo-header. The data parameter contains the entire TCP
+    packet.
 
     """
     # this is currently unused as we simply insert newer data
@@ -177,7 +210,9 @@ def validate_tcp_checksum(length, src, dst, data):
     return ~sum & 0xffff == csum
 
 def address_to_string(b):
-    """Takes a 4-byte string representing an IP-address, and returns a
+    """Converts an IP address to its string representation.
+
+    Takes a 4-byte string representing an IP address, and returns a
     dot-separated decimal representation on the form '123.123.123.123'.
 
     """
