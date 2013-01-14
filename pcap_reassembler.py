@@ -42,7 +42,16 @@ class Message(dict):
     __setattr__ = dict.__setitem__
 
 def load_pcap(filename):
-    """Loads a pcap file and returns a list of messages"""
+    """Loads a pcap file and returns a list of Message-objects, containing
+    the reassembled application-layer messages.
+
+    Usage:
+        >>> import pcap_reassembler
+        >>> msgs = pcap_reassembler.load_pcap('http.cap')
+        >>> msgs[0].data
+        'GET /download.html ...'
+
+    """
     global _tcp_conn, _msgs
     _tcp_conn   = {}
     _msgs       = []
