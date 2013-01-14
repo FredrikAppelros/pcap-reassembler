@@ -151,7 +151,11 @@ def _decode_word(data):
     return struct.unpack('!I', data)[0]
 
 def validate_tcp_checksum(length, src, dst, data):
-    """Function comment"""
+    """Validates a TCP checksum according to RFC 1071. Takes length, source
+    address and destination address for computing the IP pseudo-header.
+    The data-parameter contains the entire TCP packet.
+
+    """
     # this is currently unused as we simply insert newer data
     # over old data without checking the checksum
     csum = _decode_short(data[16:18])
@@ -173,7 +177,10 @@ def validate_tcp_checksum(length, src, dst, data):
     return ~sum & 0xffff == csum
 
 def address_to_string(b):
-    """Function comment"""
+    """Takes a 4-byte string representing an IP-address, and returns a
+    dot-separated decimal representation on the form '123.123.123.123'.
+
+    """
     assert(len(b) == 4)
     b = map(lambda x: str(_decode_byte(x)), b)
     return '.'.join(b)
