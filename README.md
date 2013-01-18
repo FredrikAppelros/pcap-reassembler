@@ -39,3 +39,7 @@ Limitations
 pcap-reassembler does not yet support IP fragmentation or IPv6. Also the only
 transport layer protocols that are supported are TCP and UDP.
 
+License
+-------
+Distributed under the MIT license. See the ```LICENSE``` file.
+
