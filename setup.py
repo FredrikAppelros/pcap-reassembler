@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-from distutils.core import setup
+from setuptools import setup
 
 setup(name="pcap-reassembler",
       version='0.1',
@@ -10,5 +8,5 @@ setup(name="pcap-reassembler",
       url='https://github.com/FredrikAppelros/pcap-reassembler',
       py_modules=['pcap_reassembler'],
       install_requires=['pylibpcap']
-      )
+)
 
