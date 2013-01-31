@@ -79,7 +79,7 @@ def _process_eth(length, data, ts):
     if eth_type == _ether_type['IPv4']:
         _process_ipv4(ts, pld)
     else:
-        raise NotImplementedError
+        pass
 
 def _process_ipv4(ts, data):
     """Processes an IPv4 packet.
@@ -100,7 +100,7 @@ def _process_ipv4(ts, data):
     elif ip_type == _ip_protocol['UDP']:
         _process_udp(ts, src, dst, pld)
     else:
-        raise NotImplementedError
+        pass
 
 def _process_tcp(ts, src_addr, dst_addr, data):
     """Processes a TCP packet.
