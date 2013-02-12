@@ -23,9 +23,13 @@ _ip_protocol = {
 }
 
 # TCP connection buffer
-_tcp_conn   = None
+_tcp_conn       = None
 # message buffer
-_msgs       = None
+_msgs           = None
+# packet count
+count           = 1
+# strict TCP reassembly policy
+strict_policy   = False
 
 class Message(dict):
     """Reassembled message class
@@ -33,6 +37,7 @@ class Message(dict):
     Message attributes are accessible as regular object attributes using
     dot-notation. The common available attributes are:
 
+     * number
      * timestamp
      * ip_protocol
      * source_addr
@@ -45,7 +50,7 @@ class Message(dict):
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
-def load_pcap(filename):
+def load_pcap(filename, strict=False):
     """Loads a pcap file and returns a list of Message objects
     containing the reassembled application layer messages.
 
@@ -56,9 +61,10 @@ def load_pcap(filename):
         'GET /download.html ...'
 
     """
-    global _tcp_conn, _msgs
-    _tcp_conn   = {}
-    _msgs       = []
+    global _tcp_conn, _msgs, strict_policy
+    _tcp_conn       = {}
+    _msgs           = []
+    strict_policy   = strict
     p = pcap.pcapObject()
     p.open_offline(filename)
     # process all packets
@@ -66,6 +72,7 @@ def load_pcap(filename):
     # flush all TCP connections for remaining messages
     for src in _tcp_conn:
         _tcp_flush(src)
+    _msgs.sort(key=lambda x: x.number)
     return _msgs
 
 def _process_eth(length, data, ts):
@@ -74,12 +81,14 @@ def _process_eth(length, data, ts):
     Propagates processing to the correct IP version processing function.
 
     """
+    global count
     eth_type = data[12:14]
     pld = data[14:]
     if eth_type == _ether_type['IPv4']:
         _process_ipv4(ts, pld)
     else:
         pass
+    count += 1
 
 def _process_ipv4(ts, data):
     """Processes an IPv4 packet.
@@ -120,9 +129,12 @@ def _process_tcp(ts, src_addr, dst_addr, data):
     ack = _decode_word(data[8:12])
     offset = (_decode_byte(data[12]) & 0xf0) >> 4
     pld = data[4*offset:]
+    src_socket = (src_addr, src_port)
+    dst_socket = (dst_addr, dst_port)
     if pld:
-        if not src_addr in _tcp_conn:
-            _tcp_conn[src_addr] = Message({
+        if not dst_socket in _tcp_conn:
+            _tcp_conn[dst_socket] = Message({
+                'number':           count,
                 'timestamp':        ts,
                 'ip_protocol':      'TCP',
                 'source_addr':      src_addr,
@@ -133,11 +145,16 @@ def _process_tcp(ts, src_addr, dst_addr, data):
                 'ack':              ack,
                 'data':             [],
             })
-        offset = seq - _tcp_conn[src_addr].seq
-        _tcp_conn[src_addr].data[offset:offset+len(pld)] = list(pld)
-    if src_addr in _tcp_conn and ack != _tcp_conn[src_addr].ack:
-        _tcp_flush(src_addr)
-        del _tcp_conn[src_addr]
+        offset = seq - _tcp_conn[dst_socket].seq
+        _tcp_conn[dst_socket].data[offset:offset+len(pld)] = list(pld)
+    if strict_policy:
+        if src_socket in _tcp_conn and ack == _tcp_conn[src_socket].seq + len(_tcp_conn[src_socket].data):
+            _tcp_flush(src_socket)
+            del _tcp_conn[src_socket]
+    else:
+        if dst_socket in _tcp_conn and ack != _tcp_conn[dst_socket].ack:
+            _tcp_flush(dst_socket)
+            del _tcp_conn[dst_socket]
 
 def _tcp_flush(src):
     """Flushes the specified TCP connection buffer.
@@ -159,6 +176,7 @@ def _process_udp(ts, src_addr, dst_addr, data):
     src_port = _decode_short(data[0:2])
     dst_port = _decode_short(data[2:4])
     msg = Message({
+        'number':           count,
         'timestamp':        ts,
         'ip_protocol':      'UDP',
         'source_addr':      src_addr,
