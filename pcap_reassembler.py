@@ -27,9 +27,9 @@ _tcp_conn       = None
 # message buffer
 _msgs           = None
 # packet count
-count           = 1
+_count           = 1
 # strict TCP reassembly policy
-strict_policy   = False
+_strict_policy   = False
 
 class Message(dict):
     """Reassembled message class
@@ -61,10 +61,11 @@ def load_pcap(filename, strict=False):
         'GET /download.html ...'
 
     """
-    global _tcp_conn, _msgs, strict_policy
+    global _tcp_conn, _msgs, _count, _strict_policy
     _tcp_conn       = {}
     _msgs           = []
-    strict_policy   = strict
+    _count          = 1
+    _strict_policy  = strict
     p = pcap.pcapObject()
     p.open_offline(filename)
     # process all packets
@@ -81,14 +82,14 @@ def _process_eth(length, data, ts):
     Propagates processing to the correct IP version processing function.
 
     """
-    global count
+    global _count
     eth_type = data[12:14]
     pld = data[14:]
     if eth_type == _ether_type['IPv4']:
         _process_ipv4(ts, pld)
     else:
         pass
-    count += 1
+    _count += 1
 
 def _process_ipv4(ts, data):
     """Processes an IPv4 packet.
@@ -134,7 +135,7 @@ def _process_tcp(ts, src_addr, dst_addr, data):
     if pld:
         if not dst_socket in _tcp_conn:
             _tcp_conn[dst_socket] = Message({
-                'number':           count,
+                'number':           _count,
                 'timestamp':        ts,
                 'ip_protocol':      'TCP',
                 'source_addr':      src_addr,
@@ -147,7 +148,7 @@ def _process_tcp(ts, src_addr, dst_addr, data):
             })
         offset = seq - _tcp_conn[dst_socket].seq
         _tcp_conn[dst_socket].data[offset:offset+len(pld)] = list(pld)
-    if strict_policy:
+    if _strict_policy:
         if src_socket in _tcp_conn and ack == _tcp_conn[src_socket].seq + len(_tcp_conn[src_socket].data):
             _tcp_flush(src_socket)
             del _tcp_conn[src_socket]
@@ -176,7 +177,7 @@ def _process_udp(ts, src_addr, dst_addr, data):
     src_port = _decode_short(data[0:2])
     dst_port = _decode_short(data[2:4])
     msg = Message({
-        'number':           count,
+        'number':           _count,
         'timestamp':        ts,
         'ip_protocol':      'UDP',
         'source_addr':      src_addr,
