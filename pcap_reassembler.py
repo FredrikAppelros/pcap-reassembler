@@ -40,10 +40,10 @@ class Message(dict):
      * number
      * timestamp
      * ip_protocol
-     * source_addr
-     * destination_addr
-     * source_port
-     * destination_port
+     * src_addr
+     * dst_addr
+     * src_port
+     * dst_port
      * data
 
     """
@@ -138,10 +138,10 @@ def _process_tcp(ts, src_addr, dst_addr, data):
                 'number':           _count,
                 'timestamp':        ts,
                 'ip_protocol':      'TCP',
-                'source_addr':      src_addr,
-                'destination_addr': dst_addr,
-                'source_port':      src_port,
-                'destination_port': dst_port,
+                'src_addr':         src_addr,
+                'dst_addr':         dst_addr,
+                'src_port':         src_port,
+                'dst_port':         dst_port,
                 'seq':              seq,
                 'ack':              ack,
                 'data':             [],
@@ -180,10 +180,10 @@ def _process_udp(ts, src_addr, dst_addr, data):
         'number':           _count,
         'timestamp':        ts,
         'ip_protocol':      'UDP',
-        'source_addr':      src_addr,
-        'destination_addr': dst_addr,
-        'source_port':      src_port,
-        'destination_port': dst_port,
+        'src_addr':         src_addr,
+        'dst_addr':         dst_addr,
+        'src_port':         src_port,
+        'dst_port':         dst_port,
         'data':             ''.join(data[8:]),
     })
     _msgs.append(msg)
