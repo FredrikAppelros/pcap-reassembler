@@ -22,14 +22,14 @@ _ip_protocol = {
     'UDP': '\x11',
 }
 
-# TCP connection buffer
-_tcp_conn       = None
+# TCP stream buffer
+_tcp_stream     = None
 # message buffer
 _msgs           = None
 # packet count
-_count           = 1
+_count          = 1
 # strict TCP reassembly policy
-_strict_policy   = False
+_strict_policy  = False
 
 class Message(dict):
     """Reassembled message class
@@ -61,8 +61,8 @@ def load_pcap(filename, strict=False):
         'GET /download.html ...'
 
     """
-    global _tcp_conn, _msgs, _count, _strict_policy
-    _tcp_conn       = {}
+    global _tcp_stream, _msgs, _count, _strict_policy
+    _tcp_stream     = {}
     _msgs           = []
     _count          = 1
     _strict_policy  = strict
@@ -71,8 +71,8 @@ def load_pcap(filename, strict=False):
     # process all packets
     p.dispatch(-1, _process_eth)
     # flush all TCP connections for remaining messages
-    for src in _tcp_conn:
-        _tcp_flush(src)
+    for socks in _tcp_stream:
+        _tcp_flush(socks)
     _msgs.sort(key=lambda x: x.number)
     return _msgs
 
@@ -130,11 +130,12 @@ def _process_tcp(ts, src_addr, dst_addr, data):
     ack = _decode_word(data[8:12])
     offset = (_decode_byte(data[12]) & 0xf0) >> 4
     pld = data[4*offset:]
-    src_socket = (src_addr, src_port)
-    dst_socket = (dst_addr, dst_port)
+    src_socket  = (src_addr, src_port)
+    dst_socket  = (dst_addr, dst_port)
+    sockets     = (src_socket, dst_socket)
     if pld:
-        if not dst_socket in _tcp_conn:
-            _tcp_conn[dst_socket] = Message({
+        if not sockets in _tcp_stream:
+            _tcp_stream[sockets] = Message({
                 'number':           _count,
                 'timestamp':        ts,
                 'ip_protocol':      'TCP',
@@ -146,24 +147,26 @@ def _process_tcp(ts, src_addr, dst_addr, data):
                 'ack':              ack,
                 'data':             [],
             })
-        offset = seq - _tcp_conn[dst_socket].seq
-        _tcp_conn[dst_socket].data[offset:offset+len(pld)] = list(pld)
+        offset = seq - _tcp_stream[sockets].seq
+        _tcp_stream[sockets].data[offset:offset+len(pld)] = list(pld)
     if _strict_policy:
-        if src_socket in _tcp_conn and ack == _tcp_conn[src_socket].seq + len(_tcp_conn[src_socket].data):
-            _tcp_flush(src_socket)
-            del _tcp_conn[src_socket]
+        # Check the other stream in the connection
+        sockets = sockets[::-1]
+        if sockets in _tcp_stream and ack == _tcp_stream[sockets].seq + len(_tcp_stream[sockets].data):
+            _tcp_flush(sockets)
+            del _tcp_stream[sockets]
     else:
-        if dst_socket in _tcp_conn and ack != _tcp_conn[dst_socket].ack:
-            _tcp_flush(dst_socket)
-            del _tcp_conn[dst_socket]
+        if sockets in _tcp_stream and ack != _tcp_stream[sockets].ack:
+            _tcp_flush(sockets)
+            del _tcp_stream[sockets]
 
-def _tcp_flush(src):
+def _tcp_flush(sockets):
     """Flushes the specified TCP connection buffer.
 
     Adds the flushed message to the message buffer.
 
     """
-    msg = _tcp_conn[src]
+    msg = _tcp_stream[sockets]
     msg['data'] = ''.join(msg.data)
     _msgs.append(msg)
 
