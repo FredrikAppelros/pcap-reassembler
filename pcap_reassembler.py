@@ -10,6 +10,18 @@ import pcap
 import struct
 import time
 
+# OSI layer constants
+PHYSICAL_LAYER      = 1
+DATA_LINK_LAYER     = 2
+NETWORK_LAYER       = 3
+TRANSPORT_LAYER     = 4
+SESSION_LAYER       = 5
+PRESENTATION_LAYER  = 6
+APPLICATION_LAYER   = 7
+
+# TPID from IEEE 802.1Q
+_tpid = '\x81\x00'
+
 # EtherType constants
 _ether_type = {
     'IPv4': '\x08\x00',
@@ -28,6 +40,8 @@ _tcp_stream     = None
 _msgs           = None
 # packet count
 _count          = 1
+# OSI layer
+_layer          = 4
 # strict TCP reassembly policy
 _strict_policy  = False
 
@@ -38,33 +52,32 @@ class Message(dict):
     dot-notation. The common available attributes are:
 
      * number
-     * timestamp
-     * ip_protocol
-     * src_addr
-     * dst_addr
-     * src_port
-     * dst_port
+     * ts
      * data
 
     """
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
-def load_pcap(filename, strict=False):
+def load_pcap(filename, layer=TRANSPORT_LAYER, strict=False):
     """Loads a pcap file and returns a list of Message objects
-    containing the reassembled application layer messages.
+    containing the reassembled messages for the specified OSI
+    layer.
 
     Usage:
         >>> import pcap_reassembler
         >>> msgs = pcap_reassembler.load_pcap('http.cap')
-        >>> msgs[0].data
+        >>> msgs[0].payload
         'GET /download.html ...'
 
     """
-    global _tcp_stream, _msgs, _count, _strict_policy
+    global _tcp_stream, _msgs, _count, _layer, _strict_policy
+    if not DATA_LINK_LAYER <= layer <= TRANSPORT_LAYER:
+        raise ValueError("Specified OSI layer is not supported.")
     _tcp_stream     = {}
     _msgs           = []
     _count          = 1
+    _layer          = layer
     _strict_policy  = strict
     p = pcap.pcapObject()
     p.open_offline(filename)
@@ -79,23 +92,45 @@ def load_pcap(filename, strict=False):
 def _process_eth(length, data, ts):
     """Processes an Ethernet packet (header to checksum; not the full frame).
 
-    Propagates processing to the correct IP version processing function.
+    May propagate processing to the correct IP version processing function.
 
     """
     global _count
-    eth_type = data[12:14]
-    pld = data[14:]
-    if eth_type == _ether_type['IPv4']:
-        _process_ipv4(ts, pld)
+    dst_addr = data[0:6]
+    src_addr = data[6:12]
+    ieee_8021q = data[12:14] == _tpid
+    if ieee_8021q:
+        tci = data[14:16]
+        eth_type = data[16:18]
+        pld = data[18:]
     else:
-        pass
+        eth_type = data[12:14]
+        pld = data[14:]
+    if _layer > 2:
+        if eth_type == _ether_type['IPv4']:
+            _process_ipv4(ts, pld)
+        else:
+            pass
+    else:
+        msg = Message({
+            'number':           _count,
+            'ts':               ts,
+            'data':             ''.join(data),
+            'src_addr':         src_addr,
+            'dst_addr':         dst_addr,
+            'eth_type':         eth_type,
+            'payload':          ''.join(pld),
+        })
+        if ieee_8021q:
+            msg['tci'] = tci
+        _msgs.append(msg)
     _count += 1
 
 def _process_ipv4(ts, data):
     """Processes an IPv4 packet.
 
     Extracts source address, destination address and protocol fields
-    and propagates processing to the correct protocol processing
+    and may propagate processing to the correct protocol processing
     function.
 
     """
@@ -105,12 +140,24 @@ def _process_ipv4(ts, data):
     src = data[12:16]
     dst = data[16:20]
     pld = data[header_len:tot_len]
-    if ip_type == _ip_protocol['TCP']:
-        _process_tcp(ts, src, dst, pld)
-    elif ip_type == _ip_protocol['UDP']:
-        _process_udp(ts, src, dst, pld)
+    if _layer > 3:
+        if ip_type == _ip_protocol['TCP']:
+            _process_tcp(ts, src, dst, pld)
+        elif ip_type == _ip_protocol['UDP']:
+            _process_udp(ts, src, dst, pld)
+        else:
+            pass
     else:
-        pass
+        msg = Message({
+            'number':           _count,
+            'ts':               ts,
+            'data':             ''.join(data[:tot_len]),
+            'ip_type':          ip_type,
+            'src_addr':         src,
+            'dst_addr':         dst,
+            'payload':          ''.join(pld),
+        })
+        _msgs.append(msg)
 
 def _process_tcp(ts, src_addr, dst_addr, data):
     """Processes a TCP packet.
@@ -137,22 +184,25 @@ def _process_tcp(ts, src_addr, dst_addr, data):
         if not sockets in _tcp_stream:
             _tcp_stream[sockets] = Message({
                 'number':           _count,
-                'timestamp':        ts,
-                'ip_protocol':      'TCP',
+                'ts':               ts,
+                'data':             [],
+                'ip_proto':         'TCP',
                 'src_addr':         src_addr,
                 'dst_addr':         dst_addr,
                 'src_port':         src_port,
                 'dst_port':         dst_port,
                 'seq':              seq,
                 'ack':              ack,
-                'data':             [],
+                'payload':          [],
             })
+        _tcp_stream[sockets].data.append(''.join(data))
         offset = seq - _tcp_stream[sockets].seq
-        _tcp_stream[sockets].data[offset:offset+len(pld)] = list(pld)
+        _tcp_stream[sockets].payload[offset:offset+len(pld)] = list(pld)
     if _strict_policy:
         # Check the other stream in the connection
         sockets = sockets[::-1]
-        if sockets in _tcp_stream and ack == _tcp_stream[sockets].seq + len(_tcp_stream[sockets].data):
+        if (sockets in _tcp_stream and ack == _tcp_stream[sockets].seq +
+                len(_tcp_stream[sockets].payload)):
             _tcp_flush(sockets)
             del _tcp_stream[sockets]
     else:
@@ -167,7 +217,7 @@ def _tcp_flush(sockets):
 
     """
     msg = _tcp_stream[sockets]
-    msg['data'] = ''.join(msg.data)
+    msg['payload'] = ''.join(msg.payload)
     _msgs.append(msg)
 
 def _process_udp(ts, src_addr, dst_addr, data):
@@ -181,13 +231,14 @@ def _process_udp(ts, src_addr, dst_addr, data):
     dst_port = _decode_short(data[2:4])
     msg = Message({
         'number':           _count,
-        'timestamp':        ts,
-        'ip_protocol':      'UDP',
+        'ts':               ts,
+        'data':             ''.join(data),
+        'ip_proto':         'UDP',
         'src_addr':         src_addr,
         'dst_addr':         dst_addr,
         'src_port':         src_port,
         'dst_port':         dst_port,
-        'data':             ''.join(data[8:]),
+        'payload':          ''.join(data[8:]),
     })
     _msgs.append(msg)
 
@@ -238,7 +289,7 @@ def address_to_string(b):
     dot-separated decimal representation on the form '123.123.123.123'.
 
     """
-    assert(len(b) == 4)
+    assert len(b) == 4
     b = map(lambda x: str(_decode_byte(x)), b)
     return '.'.join(b)
 
