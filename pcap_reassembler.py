@@ -34,17 +34,6 @@ _ip_protocol = {
     'UDP': '\x11',
 }
 
-# TCP stream buffer
-_tcp_stream     = None
-# message buffer
-_msgs           = None
-# packet count
-_count          = 1
-# OSI layer
-_layer          = 4
-# strict TCP reassembly policy
-_strict_policy  = False
-
 class Message(dict):
     """Reassembled message class
 
@@ -59,188 +48,200 @@ class Message(dict):
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
-def load_pcap(filename, layer=TRANSPORT_LAYER, strict=False):
-    """Loads a pcap file and returns a list of Message objects
-    containing the reassembled messages for the specified OSI
-    layer.
+class PcapReassembler:
+    def __init__(self):
+        # TCP stream buffer
+        self._tcp_stream     = None
+        # message buffer
+        self._msgs           = None
+        # packet count
+        self._count          = 1
+        # OSI layer
+        self._layer          = 4
+        # strict TCP reassembly policy
+        self._strict_policy  = False
 
-    Usage:
-        >>> import pcap_reassembler
-        >>> msgs = pcap_reassembler.load_pcap('http.cap')
-        >>> msgs[0].payload
-        'GET /download.html ...'
+    def load_pcap(self, filename, layer=TRANSPORT_LAYER, strict=False):
+        """Loads a pcap file and returns a list of Message objects
+        containing the reassembled messages for the specified OSI
+        layer.
 
-    """
-    global _tcp_stream, _msgs, _count, _layer, _strict_policy
-    if not DATA_LINK_LAYER <= layer <= TRANSPORT_LAYER:
-        raise ValueError("Specified OSI layer is not supported.")
-    _tcp_stream     = {}
-    _msgs           = []
-    _count          = 1
-    _layer          = layer
-    _strict_policy  = strict
-    p = pcap.pcapObject()
-    p.open_offline(filename)
-    # process all packets
-    p.dispatch(-1, _process_eth)
-    # flush all TCP connections for remaining messages
-    for socks in _tcp_stream:
-        _tcp_flush(socks)
-    _msgs.sort(key=lambda x: x.number)
-    return _msgs
+        Usage:
+            >>> import pcap_reassembler
+            >>> reassembler = pcap_reassembler.PcapReassembler()
+            >>> msgs = reassembler.load_pcap('http.cap')
+            >>> msgs[0].payload
+            'GET /download.html ...'
 
-def _process_eth(length, data, ts):
-    """Processes an Ethernet packet (header to checksum; not the full frame).
+        """
+        if not DATA_LINK_LAYER <= layer <= TRANSPORT_LAYER:
+            raise ValueError("Specified OSI layer is not supported.")
+        self._tcp_stream    = {}
+        self._msgs          = []
+        self._count         = 1
+        self._layer         = layer
+        self._strict_policy = strict
+        p = pcap.pcapObject()
+        p.open_offline(filename)
+        # process all packets
+        p.dispatch(-1, self._process_eth)
+        # flush all TCP connections for remaining messages
+        for socks in self._tcp_stream:
+            self._tcp_flush(socks)
+        self._msgs.sort(key=lambda x: x.number)
+        return self._msgs
 
-    May propagate processing to the correct IP version processing function.
+    def _process_eth(self, length, data, ts):
+        """Processes an Ethernet packet (header to checksum; not the full frame).
 
-    """
-    global _count
-    dst_addr = data[0:6]
-    src_addr = data[6:12]
-    ieee_8021q = data[12:14] == _tpid
-    if ieee_8021q:
-        tci = data[14:16]
-        eth_type = data[16:18]
-        pld = data[18:]
-    else:
-        eth_type = data[12:14]
-        pld = data[14:]
-    if _layer > 2:
-        if eth_type == _ether_type['IPv4']:
-            _process_ipv4(ts, pld)
-        else:
-            pass
-    else:
-        msg = Message({
-            'number':           _count,
-            'ts':               ts,
-            'data':             ''.join(data),
-            'src_addr':         src_addr,
-            'dst_addr':         dst_addr,
-            'eth_type':         eth_type,
-            'payload':          ''.join(pld),
-        })
+        May propagate processing to the correct IP version processing function.
+
+        """
+        dst_addr = data[0:6]
+        src_addr = data[6:12]
+        ieee_8021q = data[12:14] == _tpid
         if ieee_8021q:
-            msg['tci'] = tci
-        _msgs.append(msg)
-    _count += 1
-
-def _process_ipv4(ts, data):
-    """Processes an IPv4 packet.
-
-    Extracts source address, destination address and protocol fields
-    and may propagate processing to the correct protocol processing
-    function.
-
-    """
-    header_len = 4 * (_decode_byte(data[0]) & 0x0f)
-    tot_len = _decode_short(data[2:4])
-    ip_type = data[9]
-    src = data[12:16]
-    dst = data[16:20]
-    pld = data[header_len:tot_len]
-    if _layer > 3:
-        if ip_type == _ip_protocol['TCP']:
-            _process_tcp(ts, src, dst, pld)
-        elif ip_type == _ip_protocol['UDP']:
-            _process_udp(ts, src, dst, pld)
+            tci = data[14:16]
+            eth_type = data[16:18]
+            pld = data[18:]
         else:
-            pass
-    else:
-        msg = Message({
-            'number':           _count,
-            'ts':               ts,
-            'data':             ''.join(data[:tot_len]),
-            'ip_type':          ip_type,
-            'src_addr':         src,
-            'dst_addr':         dst,
-            'payload':          ''.join(pld),
-        })
-        _msgs.append(msg)
-
-def _process_tcp(ts, src_addr, dst_addr, data):
-    """Processes a TCP packet.
-
-    Extracts source port, destination port, sequence number and
-    acknowledgement number and adds the payload to the current message
-    data. If there is no current message in the buffer one is created
-    with the attributes of the current packet. When the acknowledgement
-    number changes the TCP connection buffer associated with the
-    current source address is flushed.
-
-    """
-    # reassemble PDUs by buffering packets and flushing when ack changes
-    src_port = _decode_short(data[0:2])
-    dst_port = _decode_short(data[2:4])
-    seq = _decode_word(data[4:8])
-    ack = _decode_word(data[8:12])
-    offset = (_decode_byte(data[12]) & 0xf0) >> 4
-    pld = data[4*offset:]
-    src_socket  = (src_addr, src_port)
-    dst_socket  = (dst_addr, dst_port)
-    sockets     = (src_socket, dst_socket)
-    if pld:
-        if not sockets in _tcp_stream:
-            _tcp_stream[sockets] = Message({
-                'number':           _count,
+            eth_type = data[12:14]
+            pld = data[14:]
+        if self._layer > 2:
+            if eth_type == _ether_type['IPv4']:
+                self._process_ipv4(ts, pld)
+            else:
+                pass
+        else:
+            msg = Message({
+                'number':           self._count,
                 'ts':               ts,
-                'data':             [],
-                'ip_proto':         'TCP',
+                'data':             ''.join(data),
                 'src_addr':         src_addr,
                 'dst_addr':         dst_addr,
-                'src_port':         src_port,
-                'dst_port':         dst_port,
-                'seq':              seq,
-                'ack':              ack,
-                'payload':          [],
+                'eth_type':         eth_type,
+                'payload':          ''.join(pld),
             })
-        _tcp_stream[sockets].data.append(''.join(data))
-        offset = seq - _tcp_stream[sockets].seq
-        _tcp_stream[sockets].payload[offset:offset+len(pld)] = list(pld)
-    if _strict_policy:
-        # Check the other stream in the connection
-        sockets = sockets[::-1]
-        if (sockets in _tcp_stream and ack == _tcp_stream[sockets].seq +
-                len(_tcp_stream[sockets].payload)):
-            _tcp_flush(sockets)
-            del _tcp_stream[sockets]
-    else:
-        if sockets in _tcp_stream and ack != _tcp_stream[sockets].ack:
-            _tcp_flush(sockets)
-            del _tcp_stream[sockets]
+            if ieee_8021q:
+                msg['tci'] = tci
+            self._msgs.append(msg)
+        self._count += 1
 
-def _tcp_flush(sockets):
-    """Flushes the specified TCP connection buffer.
+    def _process_ipv4(self, ts, data):
+        """Processes an IPv4 packet.
 
-    Adds the flushed message to the message buffer.
+        Extracts source address, destination address and protocol fields
+        and may propagate processing to the correct protocol processing
+        function.
 
-    """
-    msg = _tcp_stream[sockets]
-    msg['payload'] = ''.join(msg.payload)
-    _msgs.append(msg)
+        """
+        header_len = 4 * (_decode_byte(data[0]) & 0x0f)
+        tot_len = _decode_short(data[2:4])
+        ip_type = data[9]
+        src = data[12:16]
+        dst = data[16:20]
+        pld = data[header_len:tot_len]
+        if self._layer > 3:
+            if ip_type == _ip_protocol['TCP']:
+                self._process_tcp(ts, src, dst, pld)
+            elif ip_type == _ip_protocol['UDP']:
+                self._process_udp(ts, src, dst, pld)
+            else:
+                pass
+        else:
+            msg = Message({
+                'number':           self._count,
+                'ts':               ts,
+                'data':             ''.join(data[:tot_len]),
+                'ip_type':          ip_type,
+                'src_addr':         src,
+                'dst_addr':         dst,
+                'payload':          ''.join(pld),
+            })
+            self._msgs.append(msg)
 
-def _process_udp(ts, src_addr, dst_addr, data):
-    """Processes an UDP packet.
+    def _process_tcp(self, ts, src_addr, dst_addr, data):
+        """Processes a TCP packet.
 
-    Extracts source and destination port and creates a message
-    from the current packet which is added to the message buffer.
+        Extracts source port, destination port, sequence number and
+        acknowledgement number and adds the payload to the current message
+        data. If there is no current message in the buffer one is created
+        with the attributes of the current packet. When the acknowledgement
+        number changes the TCP connection buffer associated with the
+        current source address is flushed.
 
-    """
-    src_port = _decode_short(data[0:2])
-    dst_port = _decode_short(data[2:4])
-    msg = Message({
-        'number':           _count,
-        'ts':               ts,
-        'data':             ''.join(data),
-        'ip_proto':         'UDP',
-        'src_addr':         src_addr,
-        'dst_addr':         dst_addr,
-        'src_port':         src_port,
-        'dst_port':         dst_port,
-        'payload':          ''.join(data[8:]),
-    })
-    _msgs.append(msg)
+        """
+        # reassemble PDUs by buffering packets and flushing when ack changes
+        src_port = _decode_short(data[0:2])
+        dst_port = _decode_short(data[2:4])
+        seq = _decode_word(data[4:8])
+        ack = _decode_word(data[8:12])
+        offset = (_decode_byte(data[12]) & 0xf0) >> 4
+        pld = data[4*offset:]
+        src_socket  = (src_addr, src_port)
+        dst_socket  = (dst_addr, dst_port)
+        sockets     = (src_socket, dst_socket)
+        if pld:
+            if not sockets in self._tcp_stream:
+                self._tcp_stream[sockets] = Message({
+                    'number':           self._count,
+                    'ts':               ts,
+                    'data':             [],
+                    'ip_proto':         'TCP',
+                    'src_addr':         src_addr,
+                    'dst_addr':         dst_addr,
+                    'src_port':         src_port,
+                    'dst_port':         dst_port,
+                    'seq':              seq,
+                    'ack':              ack,
+                    'payload':          [],
+                })
+            self._tcp_stream[sockets].data.append(''.join(data))
+            offset = seq - self._tcp_stream[sockets].seq
+            self._tcp_stream[sockets].payload[offset:offset+len(pld)] = list(pld)
+        if self._strict_policy:
+            # Check the other stream in the connection
+            sockets = sockets[::-1]
+            if (sockets in self._tcp_stream and ack == self._tcp_stream[sockets].seq +
+                    len(self._tcp_stream[sockets].payload)):
+                self._tcp_flush(sockets)
+                del self._tcp_stream[sockets]
+        else:
+            if sockets in self._tcp_stream and ack != self._tcp_stream[sockets].ack:
+                self._tcp_flush(sockets)
+                del self._tcp_stream[sockets]
+
+    def _tcp_flush(self, sockets):
+        """Flushes the specified TCP connection buffer.
+
+        Adds the flushed message to the message buffer.
+
+        """
+        msg = self._tcp_stream[sockets]
+        msg['payload'] = ''.join(msg.payload)
+        self._msgs.append(msg)
+
+    def _process_udp(self, ts, src_addr, dst_addr, data):
+        """Processes an UDP packet.
+
+        Extracts source and destination port and creates a message
+        from the current packet which is added to the message buffer.
+
+        """
+        src_port = _decode_short(data[0:2])
+        dst_port = _decode_short(data[2:4])
+        msg = Message({
+            'number':           self._count,
+            'ts':               ts,
+            'data':             ''.join(data),
+            'ip_proto':         'UDP',
+            'src_addr':         src_addr,
+            'dst_addr':         dst_addr,
+            'src_port':         src_port,
+            'dst_port':         dst_port,
+            'payload':          ''.join(data[8:]),
+        })
+        self._msgs.append(msg)
 
 def _decode_byte(data):
     """Decodes one byte of network data into an unsigned char."""
