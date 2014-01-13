@@ -84,7 +84,11 @@ class PcapReassembler:
         p = pcap.pcapObject()
         p.open_offline(filename)
         # process all packets
-        p.dispatch(-1, self._process_eth)
+        try:
+            p.dispatch(-1, self._process_eth)
+        except Exception as e:
+            print e
+
         # flush all TCP connections for remaining messages
         for socks in self._tcp_stream:
             self._tcp_flush(socks)
