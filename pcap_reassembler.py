@@ -40,11 +40,19 @@ class Message(dict):
     Message attributes are accessible as regular object attributes using
     dot-notation. The common available attributes are:
 
-     * number
-     * ts
-     * data
+     * number       - the message number based on the order of the
+                      first fragment
+     * fragment_tss - the fragment timestamps
+     * ts           - the message timestamp based on the timestamp of
+                      the first fragment
+     * data         - the raw byte data of the entire message
+     * payload      - the raw byte data of the message payload
 
     """
+    @property
+    def ts(self):
+        return self.fragment_tss[0]
+
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
@@ -119,7 +127,7 @@ class PcapReassembler:
         else:
             msg = Message({
                 'number':           self._count,
-                'ts':               ts,
+                'fragment_tss':     [ts],
                 'data':             ''.join(data),
                 'src_addr':         src_addr,
                 'dst_addr':         dst_addr,
@@ -155,7 +163,7 @@ class PcapReassembler:
         else:
             msg = Message({
                 'number':           self._count,
-                'ts':               ts,
+                'fragment_tss':     [ts],
                 'data':             ''.join(data[:tot_len]),
                 'ip_type':          ip_type,
                 'src_addr':         src,
@@ -189,7 +197,7 @@ class PcapReassembler:
             if not sockets in self._tcp_stream:
                 self._tcp_stream[sockets] = Message({
                     'number':           self._count,
-                    'ts':               ts,
+                    'fragment_tss':     [],
                     'data':             [],
                     'ip_proto':         'TCP',
                     'src_addr':         src_addr,
@@ -200,9 +208,11 @@ class PcapReassembler:
                     'ack':              ack,
                     'payload':          [],
                 })
-            self._tcp_stream[sockets].data.append(''.join(data))
-            offset = seq - self._tcp_stream[sockets].seq
-            self._tcp_stream[sockets].payload[offset:offset+len(pld)] = list(pld)
+            msg = self._tcp_stream[sockets]
+            msg.fragment_tss.append(ts)
+            msg.data.append(''.join(data))
+            offset = seq - msg.seq
+            msg.payload[offset:offset+len(pld)] = list(pld)
         if self._strict_policy:
             # Check the other stream in the connection
             sockets = sockets[::-1]
@@ -222,7 +232,7 @@ class PcapReassembler:
 
         """
         msg = self._tcp_stream[sockets]
-        msg['payload'] = ''.join(msg.payload)
+        msg.payload = ''.join(msg.payload)
         self._msgs.append(msg)
 
     def _process_udp(self, ts, src_addr, dst_addr, data):
@@ -236,7 +246,7 @@ class PcapReassembler:
         dst_port = _decode_short(data[2:4])
         msg = Message({
             'number':           self._count,
-            'ts':               ts,
+            'fragment_tss':     [ts],
             'data':             ''.join(data),
             'ip_proto':         'UDP',
             'src_addr':         src_addr,
@@ -297,4 +307,3 @@ def address_to_string(b):
     assert len(b) == 4
     b = map(lambda x: str(_decode_byte(x)), b)
     return '.'.join(b)
-
