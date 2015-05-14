@@ -30,7 +30,7 @@ Usage
 
 ```python
 >>> from pcap_reassembler import PcapReassembler, address_to_string
->>> reassembler = pcap_reassembler.PcapReassembler()
+>>> reassembler = PcapReassembler()
 >>> messages = reassembler.load_pcap('http.cap')
 >>> msg = messages[0]
 >>> msg.payload
@@ -49,4 +49,3 @@ License
 -------
 
 Distributed under the MIT license. See the ```LICENSE``` file.
-
