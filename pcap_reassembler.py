@@ -34,6 +34,8 @@ _ip_protocol = {
     'UDP': '\x11',
 }
 
+FILL_BYTE = "\x00"
+
 class Message(dict):
     """Reassembled message class
 
@@ -212,6 +214,8 @@ class PcapReassembler:
             msg.fragment_tss.append(ts)
             msg.data.append(''.join(data))
             offset = seq - msg.seq
+            if offset > len(msg.payload):
+                msg.payload.extend(FILL_BYTE * (offset - len(msg.payload)))
             msg.payload[offset:offset+len(pld)] = list(pld)
         if self._strict_policy:
             # Check the other stream in the connection
